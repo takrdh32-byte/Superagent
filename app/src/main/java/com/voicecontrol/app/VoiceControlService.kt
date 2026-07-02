@@ -26,22 +26,14 @@ class VoiceControlService : Service() {
         "youtube" to "com.google.android.youtube",
         "chrome" to "com.android.chrome",
         "instagram" to "com.instagram.android",
-        "whatsapp" to "com.whatsapp",
-        "facebook" to "com.facebook.katana",
-        "gmail" to "com.google.android.gm",
-        "google" to "com.google.android.googlequicksearchbox",
-        "maps" to "com.google.android.apps.maps"
+        "whatsapp" to "com.whatsapp"
     )
 
     private val appAliases = mapOf(
         "youtube" to listOf("youtube", "yt", "youtub", "यूट्यूब"),
         "chrome" to listOf("chrome", "chrom", "क्रोम", "browser"),
         "instagram" to listOf("instagram", "insta", "इंस्टाग्राम"),
-        "whatsapp" to listOf("whatsapp", "whatsap", "whats app", "व्हाट्सएप"),
-        "facebook" to listOf("facebook", "fb", "फेसबुक"),
-        "gmail" to listOf("gmail", "mail", "email", "जीमेल"),
-        "google" to listOf("google", "गूगल", "assistant"),
-        "maps" to listOf("maps", "map", "मैप", "navigation")
+        "whatsapp" to listOf("whatsapp", "whatsap", "whats app", "व्हाट्सएप")
     )
 
     private val openWords = listOf(
@@ -76,20 +68,11 @@ class VoiceControlService : Service() {
     }
 
     private fun setupRecognizer() {
-        // ✅ अगर फ़ोन Android 12+ है और ऑन-डिवाइस इंजन उपलब्ध है, तो वही इस्तेमाल करें
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            SpeechRecognizer.isOnDeviceSpeechRecognizerAvailable(this)) {
-            recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-            Log.d(TAG, "Using on-device speech recognizer")
-        } else {
-            // नहीं तो सामान्य रेकग्नाइज़र
-            if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-                Log.e(TAG, "Speech recognition not available")
-                return
-            }
-            recognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            Log.e(TAG, "Speech recognition not available")
+            return
         }
-
+        recognizer = SpeechRecognizer.createSpeechRecognizer(this)
         recognizer?.setRecognitionListener(listener)
         startListening()
     }
@@ -99,6 +82,7 @@ class VoiceControlService : Service() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN")
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
         }
         try {
@@ -159,7 +143,7 @@ class VoiceControlService : Service() {
             }
         }
 
-        if (!wantsOpen) wantsOpen = true   // अगर कोई एक्शन वर्ड नहीं बोला, तो डिफ़ॉल्ट "open"
+        if (!wantsOpen) wantsOpen = true
 
         if (targetApp != null && wantsOpen) {
             val packageName = appPackages[targetApp]
