@@ -22,12 +22,37 @@ class VoiceControlService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var isDestroyed = false
 
-    // command word -> app package name
+    // ऐप का नाम -> पैकेज नेम
     private val appPackages = mapOf(
         "youtube" to "com.google.android.youtube",
         "chrome" to "com.android.chrome",
-        "instagram" to "com.instagram.android"
+        "instagram" to "com.instagram.android",
+        "whatsapp" to "com.whatsapp",
+        "facebook" to "com.facebook.katana",
+        "gmail" to "com.google.android.gm",
+        "google" to "com.google.android.googlequicksearchbox",
+        "maps" to "com.google.android.apps.maps",
+        "calculator" to "com.android.calculator2",
+        "calendar" to "com.android.calendar"
     )
+
+    // ऐप के हिंदी और आम नाम, जो लोग बोल सकते हैं
+    private val appAliases = mapOf(
+        "youtube" to listOf("youtube", "yt", "youtub", "यूट्यूब", "ytube"),
+        "chrome" to listOf("chrome", "chrom", "क्रोम", "google chrome", "browser"),
+        "instagram" to listOf("instagram", "insta", "इंस्टाग्राम", "instagrm"),
+        "whatsapp" to listOf("whatsapp", "whatsap", "whats app", "व्हाट्सएप", "whatapp"),
+        "facebook" to listOf("facebook", "fb", "फेसबुक", "face book"),
+        "gmail" to listOf("gmail", "mail", "email", "जीमेल", "g mail"),
+        "google" to listOf("google", "गूगल", "googal", "assistant"),
+        "maps" to listOf("maps", "map", "मैप", "gps", "navigation"),
+        "calculator" to listOf("calculator", "calc", "कैलकुलेटर", "cal"),
+        "calendar" to listOf("calendar", "cal", "कैलेंडर", "calendar")
+    )
+
+    // एक्शन वर्ड्स
+    private val openWords = listOf("open", "kholo", "khol", "kholna", "खोलो", "खोल", "खोलना", "start", "launch", "play", "chalu", "चालू", "शुरू", "shuru", "chalana", "चलाना", "dikhao", "दिखाओ", "dekhna", "देखना", "jana", "जाना")
+    private val closeWords = listOf("close", "band", "bandh", "बंद", "बंद करो", "बंद करना", "ruk", "रुक", "stop", "hatana", "हटाना", "mitana", "मिटाना")
 
     override fun onCreate() {
         super.onCreate()
@@ -83,13 +108,15 @@ class VoiceControlService : Service() {
             recognizer?.startListening(intent)
         } catch (e: Exception) {
             Log.e(TAG, "startListening failed: ${e.message}")
-            scheduleRestart()
+            scheduleRestart(2000)
         }
     }
 
-    private fun scheduleRestart(delayMs: Long = 800) {
+    private fun scheduleRestart(delayMs: Long = 2000) {
         if (isDestroyed) return
-        handler.postDelayed({ startListening() }, delayMs)
+        handler.postDelayed({
+            startListening()
+        }, delayMs)
     }
 
     private val listener = object : RecognitionListener {
@@ -100,8 +127,11 @@ class VoiceControlService : Service() {
         override fun onEndOfSpeech() {}
 
         override fun onError(error: Int) {
-            // Common on continuous listening: ERROR_NO_MATCH / ERROR_SPEECH_TIMEOUT — just restart
-            scheduleRestart()
+            if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                scheduleRestart(1500)
+            } else {
+                scheduleRestart(2500)
+            }
         }
 
         override fun onResults(results: android.os.Bundle?) {
@@ -111,45 +141,64 @@ class VoiceControlService : Service() {
                 Log.d(TAG, "Heard: $spoken")
                 handleCommand(spoken)
             }
-            scheduleRestart(300)
+            scheduleRestart(600)
         }
 
         override fun onPartialResults(partialResults: android.os.Bundle?) {}
         override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
     }
 
+    // ========== सुपर-स्मार्ट कमांड हैंडलिंग ==========
     private fun handleCommand(spoken: String) {
-        val wantsOpen = spoken.contains("open")
-        val wantsClose = spoken.contains("close") || spoken.contains("band")
+        val words = spoken.split(" ")
+        var targetApp: String? = null
+        var wantsOpen = false
+        var wantsClose = false
 
-        val matchedApp = appPackages.keys.firstOrNull { key -> spoken.contains(key) }
-            ?: fuzzyMatch(spoken)
+        // 1. हर शब्द चेक करो
+        for (word in words) {
+            // क्या यह कोई एक्शन वर्ड है?
+            if (openWords.any { it == word }) {
+                wantsOpen = true
+            }
+            if (closeWords.any { it == word }) {
+                wantsClose = true
+            }
 
-        if (matchedApp == null) return
-        val packageName = appPackages[matchedApp] ?: return
-
-        when {
-            wantsOpen -> openApp(packageName)
-            wantsClose -> closeApp(packageName)
-        }
-    }
-
-    // simple fuzzy fallback using edit distance, handles minor mis-recognition
-    private fun fuzzyMatch(spoken: String): String? {
-        var best: String? = null
-        var bestDist = Int.MAX_VALUE
-        for (word in spoken.split(" ")) {
-            for (key in appPackages.keys) {
-                val d = levenshtein(word, key)
-                if (d < bestDist && d <= 2) {
-                    bestDist = d
-                    best = key
+            // क्या यह कोई ऐप है?
+            if (targetApp == null) {
+                for ((key, aliases) in appAliases) {
+                    if (aliases.any { alias -> levenshtein(word, alias) <= 2 || word.contains(alias) || alias.contains(word) }) {
+                        targetApp = key
+                        break
+                    }
                 }
             }
         }
-        return best
+
+        // 2. अगर कोई एक्शन नहीं बोला, तो डिफ़ॉल्ट "open" मानो
+        if (!wantsOpen && !wantsClose) {
+            wantsOpen = true
+        }
+
+        // 3. अगर ऐप मिल गई और हमें खोलना है
+        if (targetApp != null && wantsOpen) {
+            val packageName = appPackages[targetApp]
+            if (packageName != null) {
+                openApp(packageName)
+            }
+        }
+
+        // 4. बंद करने का प्रयास (हो सके तो)
+        if (targetApp != null && wantsClose) {
+            val packageName = appPackages[targetApp]
+            if (packageName != null) {
+                closeApp(packageName)
+            }
+        }
     }
 
+    // फ़ज़ी मैचिंग
     private fun levenshtein(a: String, b: String): Int {
         val dp = Array(a.length + 1) { IntArray(b.length + 1) }
         for (i in 0..a.length) dp[i][0] = i
@@ -177,9 +226,6 @@ class VoiceControlService : Service() {
         }
     }
 
-    // NOTE: Android does not allow one app to force-stop another without root or
-    // an Accessibility Service. This best-effort approach kills the background
-    // process if the target app is not currently in the foreground.
     private fun closeApp(packageName: String) {
         try {
             val am = getSystemService(ACTIVITY_SERVICE) as ActivityManager
