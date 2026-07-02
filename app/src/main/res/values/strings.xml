@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Voice Control</string>
+    <string name="notif_channel_name">Voice Control Listening</string>
+    <string name="notif_text">Listening for commands…</string>
+</resources>
