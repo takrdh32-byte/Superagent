@@ -2,18 +2,22 @@ package com.voicecontrol.app
 
 import android.app.*
 import android.content.Intent
-import android.os.AsyncTask
+import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
-import edu.cmu.pocketsphinx.*
-import java.io.File
-import java.io.IOException
-import java.lang.ref.WeakReference
 
-class VoiceControlService : Service(), RecognitionListener {
+class VoiceControlService : Service() {
 
-    private var recognizer: SpeechRecognizer? = null
+    private var speechRecognizer: SpeechRecognizer? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private var isListening = false
 
     private val appPackages = mapOf(
         "youtube" to "com.google.android.youtube",
@@ -25,7 +29,7 @@ class VoiceControlService : Service(), RecognitionListener {
     override fun onCreate() {
         super.onCreate()
         startForeground(1, buildNotification())
-        SetupTask(this).execute()
+        initSpeechRecognizer()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
@@ -42,72 +46,83 @@ class VoiceControlService : Service(), RecognitionListener {
             .build()
     }
 
-    private class SetupTask(service: VoiceControlService) : AsyncTask<Void, Void, Exception>() {
-        private val reference = WeakReference(service)
-
-        override fun doInBackground(vararg params: Void?): Exception? {
-            val svc = reference.get() ?: return null
-            try {
-                val assets = Assets(svc)
-                val assetDir = assets.syncAssets()
-                svc.setupRecognizer(assetDir)
-            } catch (e: IOException) {
-                return e
-            }
-            return null
+    private fun initSpeechRecognizer() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            Toast.makeText(this, "Speech recognition not available", Toast.LENGTH_LONG).show()
+            stopSelf()
+            return
         }
 
-        override fun onPostExecute(result: Exception?) {
-            val svc = reference.get() ?: return
-            if (result != null) {
-                Toast.makeText(svc, "Init failed: ${result.message}", Toast.LENGTH_SHORT).show()
-                svc.stopSelf()
-            } else {
-                svc.recognizer?.startListening("youtube")
-                Toast.makeText(svc, "Ready – Speak a command", Toast.LENGTH_SHORT).show()
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+
+            override fun onError(error: Int) {
+                // एरर को हैंडल करो और दोबारा सुनना शुरू करो
+                restartListening()
             }
+
+            override fun onResults(results: Bundle?) {
+                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                val spoken = matches?.firstOrNull()?.lowercase()?.trim() ?: ""
+                if (spoken.isNotEmpty()) {
+                    Toast.makeText(this@VoiceControlService, "Heard: $spoken", Toast.LENGTH_SHORT).show()
+                    handleCommand(spoken)
+                }
+                restartListening()
+            }
+
+            override fun onPartialResults(partialResults: Bundle?) {}
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        })
+
+        startListening()
+    }
+
+    private fun startListening() {
+        if (isListening) return
+        isListening = true
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN")
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
         }
+        speechRecognizer?.startListening(intent)
     }
 
-    private fun setupRecognizer(assetsDir: File) {
-        recognizer = SpeechRecognizerSetup.defaultSetup()
-            .setAcousticModel(File(assetsDir, "en-us-ptm"))
-            .setDictionary(File(assetsDir, "cmudict-en-us.dict"))
-            .recognizer
-
-        recognizer?.addKeyphraseSearch("youtube", "open youtube")
-        recognizer?.addKeyphraseSearch("chrome", "open chrome")
-        recognizer?.addKeyphraseSearch("instagram", "open instagram")
-        recognizer?.addKeyphraseSearch("whatsapp", "open whatsapp")
-        recognizer?.addListener(this)
+    private fun restartListening() {
+        isListening = false
+        speechRecognizer?.cancel()
+        handler.postDelayed({ startListening() }, 500) // थोड़ा delay
     }
 
-    override fun onPartialResult(hypothesis: Hypothesis?) {
-        val phrase = hypothesis?.hypstr?.lowercase()?.trim() ?: return
-        Toast.makeText(this, "Heard: $phrase", Toast.LENGTH_SHORT).show()
-
+    private fun handleCommand(spoken: String) {
         for ((app, packageName) in appPackages) {
-            if (phrase.contains(app)) {
+            if (spoken.contains(app)) {
                 openApp(packageName, app)
-                recognizer?.stop()
-                recognizer?.startListening("youtube")
                 return
             }
         }
-    }
-
-    override fun onResult(hypothesis: Hypothesis?) {}
-    override fun onBeginningOfSpeech() {}
-    override fun onEndOfSpeech() {}
-
-    override fun onError(e: Exception?) {
-        recognizer?.stop()
-        recognizer?.startListening("youtube")
-    }
-
-    override fun onTimeout() {
-        recognizer?.stop()
-        recognizer?.startListening("youtube")
+        // कुछ आम गलतियों के लिए
+        val aliases = mapOf(
+            "youtube" to listOf("youtub", "yt", "यूट्यूब"),
+            "chrome" to listOf("chrom", "क्रोम", "browser"),
+            "instagram" to listOf("insta", "इंस्टाग्राम"),
+            "whatsapp" to listOf("whatsap", "whats app", "व्हाट्सएप")
+        )
+        for ((app, words) in aliases) {
+            for (word in words) {
+                if (spoken.contains(word)) {
+                    openApp(appPackages[app]!!, app)
+                    return
+                }
+            }
+        }
     }
 
     private fun openApp(packageName: String, name: String) {
@@ -122,8 +137,7 @@ class VoiceControlService : Service(), RecognitionListener {
     }
 
     override fun onDestroy() {
-        recognizer?.cancel()
-        recognizer?.shutdown()
+        speechRecognizer?.destroy()
         super.onDestroy()
     }
 }
