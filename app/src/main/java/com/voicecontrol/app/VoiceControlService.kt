@@ -2,22 +2,17 @@ package com.voicecontrol.app
 
 import android.app.*
 import android.content.Intent
-import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import java.io.File
 
 class VoiceControlService : Service() {
 
-    private var speechRecognizer: SpeechRecognizer? = null
     private val handler = Handler(Looper.getMainLooper())
-    private var isListening = false
+    private var isRunning = false
 
     private val appPackages = mapOf(
         "youtube" to "com.google.android.youtube",
@@ -26,10 +21,12 @@ class VoiceControlService : Service() {
         "whatsapp" to "com.whatsapp"
     )
 
+    private val commandFile = File("/sdcard/voice_commands.txt")
+
     override fun onCreate() {
         super.onCreate()
         startForeground(1, buildNotification())
-        initSpeechRecognizer()
+        startWatching()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
@@ -39,76 +36,41 @@ class VoiceControlService : Service() {
         val channel = NotificationChannel("voice", "Voice Control", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         return NotificationCompat.Builder(this, "voice")
-            .setContentTitle("Voice Control")
-            .setContentText("Listening…")
+            .setContentTitle("Voice Control (Python)")
+            .setContentText("Waiting for command...")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .build()
     }
 
-    private fun initSpeechRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            Toast.makeText(this, "Speech recognition not available", Toast.LENGTH_LONG).show()
-            stopSelf()
-            return
-        }
-
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
-        speechRecognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-
-            override fun onError(error: Int) {
-                // एरर को हैंडल करो और दोबारा सुनना शुरू करो
-                restartListening()
+    private fun startWatching() {
+        isRunning = true
+        Thread {
+            var lastCommand = ""
+            while (isRunning) {
+                try {
+                    if (commandFile.exists()) {
+                        val text = commandFile.readText().trim().lowercase()
+                        if (text.isNotEmpty() && text != lastCommand) {
+                            lastCommand = text
+                            handler.post { handleCommand(text) }
+                        }
+                    }
+                } catch (_: Exception) {}
+                Thread.sleep(800)
             }
-
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                val spoken = matches?.firstOrNull()?.lowercase()?.trim() ?: ""
-                if (spoken.isNotEmpty()) {
-                    Toast.makeText(this@VoiceControlService, "Heard: $spoken", Toast.LENGTH_SHORT).show()
-                    handleCommand(spoken)
-                }
-                restartListening()
-            }
-
-            override fun onPartialResults(partialResults: Bundle?) {}
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
-
-        startListening()
-    }
-
-    private fun startListening() {
-        if (isListening) return
-        isListening = true
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN")
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-        }
-        speechRecognizer?.startListening(intent)
-    }
-
-    private fun restartListening() {
-        isListening = false
-        speechRecognizer?.cancel()
-        handler.postDelayed({ startListening() }, 500) // थोड़ा delay
+        }.start()
     }
 
     private fun handleCommand(spoken: String) {
+        Toast.makeText(this, "Heard: $spoken", Toast.LENGTH_SHORT).show()
         for ((app, packageName) in appPackages) {
             if (spoken.contains(app)) {
                 openApp(packageName, app)
                 return
             }
         }
-        // कुछ आम गलतियों के लिए
+        // हिंदी/गलतियों के लिए
         val aliases = mapOf(
             "youtube" to listOf("youtub", "yt", "यूट्यूब"),
             "chrome" to listOf("chrom", "क्रोम", "browser"),
@@ -137,7 +99,7 @@ class VoiceControlService : Service() {
     }
 
     override fun onDestroy() {
-        speechRecognizer?.destroy()
+        isRunning = false
         super.onDestroy()
     }
 }
