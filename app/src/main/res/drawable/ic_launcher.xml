@@ -4,12 +4,24 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
     <!-- बैंगनी गोला बैकग्राउंड -->
     <path
         android:fillColor="#6200EE"
         android:pathData="M54,54m-40,0a40,40 0,1 1,80 0a40,40 0,1 1,-80 0" />
-    <!-- सफ़ेद "R" अक्षर (RecoverX की तरह) -->
+
+    <!-- माइक्रोफोन बॉडी -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M40,72 L40,36 L54,36 Q66,36 66,48 Q60,54 54,54 L66,72 L58,72 L46,56 L40,56 L40,72 Z" />
+        android:pathData="M54,38m-10,0a10,10 0,1 1,20 0a10,10 0,1 1,-20 0" />
+
+    <!-- माइक्रोफोन का निचला हिस्सा (स्टैंड) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,48 L44,58 Q44,66 54,66 Q64,66 64,58 L64,48" />
+
+    <!-- माइक्रोफोन का बेस -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,68 L66,68 L66,72 L42,72 Z" />
 </vector>
