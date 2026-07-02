@@ -2,28 +2,18 @@ package com.voicecontrol.app
 
 import android.app.*
 import android.content.Intent
-import android.os.Build
-import android.os.Handler
+import android.os.AsyncTask
 import android.os.IBinder
-import android.os.Looper
-import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
-import org.vosk.LibVosk
-import org.vosk.LogLevel
-import org.vosk.Model
-import org.vosk.Recognizer
-import org.vosk.android.RecognitionListener
-import org.vosk.android.SpeechService
-import org.vosk.android.StorageService
+import edu.cmu.pocketsphinx.*
+import java.io.File
 import java.io.IOException
+import java.lang.ref.WeakReference
 
 class VoiceControlService : Service(), RecognitionListener {
 
-    private var speechService: SpeechService? = null
-    private var model: Model? = null
-    private var isDestroyed = false
-    private val handler = Handler(Looper.getMainLooper())
+    private var recognizer: SpeechRecognizer? = null
 
     private val appPackages = mapOf(
         "youtube" to "com.google.android.youtube",
@@ -35,111 +25,89 @@ class VoiceControlService : Service(), RecognitionListener {
     override fun onCreate() {
         super.onCreate()
         startForeground(1, buildNotification())
-        initModel()
+        SetupTask(this).execute()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun buildNotification(): Notification {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                "voice_control_vosk",
-                "Voice Control (Vosk)",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        }
-        return NotificationCompat.Builder(this, "voice_control_vosk")
+        val channel = NotificationChannel("voice", "Voice Control", NotificationManager.IMPORTANCE_LOW)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        return NotificationCompat.Builder(this, "voice")
             .setContentTitle("Voice Control")
-            .setContentText("Listening for commands…")
+            .setContentText("Listening…")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .build()
     }
 
-    private fun initModel() {
-        LibVosk.setLogLevel(LogLevel.WARNINGS)
-        StorageService.unpack(this, "model-en-us", "model",
-            { mdl ->
-                model = mdl
-                startVoskListening()
-                Toast.makeText(this, "Vosk model ready", Toast.LENGTH_SHORT).show()
-            },
-            { err ->
-                Log.e("Vosk", "Failed to unpack model", err)
-                stopSelf()
+    private class SetupTask(service: VoiceControlService) : AsyncTask<Void, Void, Exception>() {
+        private val reference = WeakReference(service)
+
+        override fun doInBackground(vararg params: Void?): Exception? {
+            val svc = reference.get() ?: return null
+            try {
+                val assets = Assets(svc)
+                val assetDir = assets.syncAssets()
+                svc.setupRecognizer(assetDir)
+            } catch (e: IOException) {
+                return e
             }
-        )
-    }
+            return null
+        }
 
-    private fun startVoskListening() {
-        try {
-            val rec = Recognizer(model, 16000.0f)
-            speechService = SpeechService(rec, 16000.0f)
-            speechService?.startListening(this)
-        } catch (e: IOException) {
-            Log.e("Vosk", "Failed to start Vosk recognizer", e)
+        override fun onPostExecute(result: Exception?) {
+            val svc = reference.get() ?: return
+            if (result != null) {
+                Toast.makeText(svc, "Init failed: ${result.message}", Toast.LENGTH_SHORT).show()
+                svc.stopSelf()
+            } else {
+                svc.recognizer?.startListening("youtube")
+                Toast.makeText(svc, "Ready – Speak a command", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
-    override fun onPartialResult(hypothesis: String) {
-        val spoken = extractText(hypothesis)
-        if (spoken.isNotEmpty()) handleCommand(spoken)
+    private fun setupRecognizer(assetsDir: File) {
+        recognizer = SpeechRecognizerSetup.defaultSetup()
+            .setAcousticModel(File(assetsDir, "en-us-ptm"))
+            .setDictionary(File(assetsDir, "cmudict-en-us.dict"))
+            .recognizer
+
+        recognizer?.addKeyphraseSearch("youtube", "open youtube")
+        recognizer?.addKeyphraseSearch("chrome", "open chrome")
+        recognizer?.addKeyphraseSearch("instagram", "open instagram")
+        recognizer?.addKeyphraseSearch("whatsapp", "open whatsapp")
+        recognizer?.addListener(this)
     }
 
-    override fun onResult(hypothesis: String) {
-        val spoken = extractText(hypothesis)
-        if (spoken.isNotEmpty()) handleCommand(spoken)
-    }
-
-    override fun onFinalResult(hypothesis: String) {
-        restartVosk()
-    }
-
-    override fun onError(exception: Exception) {
-        Log.e("Vosk", "Recognition error", exception)
-        restartVosk()
-    }
-
-    override fun onTimeout() {
-        restartVosk()
-    }
-
-    private fun restartVosk() {
-        speechService?.stop()
-        speechService = null
-        if (!isDestroyed) {
-            handler.postDelayed({ startVoskListening() }, 1000)
-        }
-    }
-
-    private fun extractText(json: String): String {
-        return try {
-            val start = json.indexOf("\"text\" : \"") + 10
-            val end = json.indexOf("\"", start)
-            if (start >= 10 && end > start) {
-                json.substring(start, end).lowercase().trim()
-            } else ""
-        } catch (e: Exception) {
-            ""
-        }
-    }
-
-    private fun handleCommand(spoken: String) {
-        Toast.makeText(this, "Heard: $spoken", Toast.LENGTH_SHORT).show()
+    override fun onPartialResult(hypothesis: Hypothesis?) {
+        val phrase = hypothesis?.hypstr?.lowercase()?.trim() ?: return
+        Toast.makeText(this, "Heard: $phrase", Toast.LENGTH_SHORT).show()
 
         for ((app, packageName) in appPackages) {
-            if (spoken.contains(app) ||
-                (app == "youtube" && (spoken.contains("youtub") || spoken.contains("yt") || spoken.contains("यूट्यूब"))) ||
-                (app == "chrome" && (spoken.contains("chrom") || spoken.contains("क्रोम"))) ||
-                (app == "instagram" && (spoken.contains("insta") || spoken.contains("इंस्टाग्राम"))) ||
-                (app == "whatsapp" && (spoken.contains("whatsap") || spoken.contains("whats app") || spoken.contains("व्हाट्सएप")))
-            ) {
+            if (phrase.contains(app)) {
                 openApp(packageName, app)
+                recognizer?.stop()
+                recognizer?.startListening("youtube")
                 return
             }
         }
+    }
+
+    override fun onResult(hypothesis: Hypothesis?) {}
+    override fun onBeginningOfSpeech() {}
+    override fun onEndOfSpeech() {}
+
+    override fun onError(e: Exception?) {
+        recognizer?.stop()
+        recognizer?.startListening("youtube")
+    }
+
+    override fun onTimeout() {
+        recognizer?.stop()
+        recognizer?.startListening("youtube")
     }
 
     private fun openApp(packageName: String, name: String) {
@@ -154,11 +122,8 @@ class VoiceControlService : Service(), RecognitionListener {
     }
 
     override fun onDestroy() {
-        isDestroyed = true
-        speechService?.stop()
-        speechService?.shutdown()
-        speechService = null
-        model = null
+        recognizer?.cancel()
+        recognizer?.shutdown()
         super.onDestroy()
     }
 }
