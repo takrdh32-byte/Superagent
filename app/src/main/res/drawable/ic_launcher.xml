@@ -4,9 +4,11 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- बैंगनी गोला बैकग्राउंड -->
     <path
         android:fillColor="#6200EE"
         android:pathData="M54,54m-40,0a40,40 0,1 1,80 0a40,40 0,1 1,-80 0" />
+    <!-- सफ़ेद "R" अक्षर (RecoverX की तरह) -->
     <path
         android:fillColor="#FFFFFF"
         android:pathData="M40,72 L40,36 L54,36 Q66,36 66,48 Q60,54 54,54 L66,72 L58,72 L46,56 L40,56 L40,72 Z" />
