@@ -21,6 +21,7 @@ class VoiceControlService : Service() {
         "whatsapp" to "com.whatsapp"
     )
 
+    // वही फ़ाइल जो Python स्क्रिप्ट लिखती है
     private val commandFile = File("/sdcard/voice_commands.txt")
 
     override fun onCreate() {
