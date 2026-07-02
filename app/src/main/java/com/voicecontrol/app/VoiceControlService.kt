@@ -25,7 +25,6 @@ class VoiceControlService : Service(), RecognitionListener {
     private var isDestroyed = false
     private val handler = Handler(Looper.getMainLooper())
 
-    // कमांड मैपिंग – ज़रूरत पड़ने पर और शब्द जोड़ो
     private val appPackages = mapOf(
         "youtube" to "com.google.android.youtube",
         "chrome" to "com.android.chrome",
@@ -84,24 +83,17 @@ class VoiceControlService : Service(), RecognitionListener {
         }
     }
 
-    // RecognitionListener callbacks
     override fun onPartialResult(hypothesis: String) {
-        // Vosk देता है JSON, हम सिर्फ "text" फील्ड निकालेंगे
         val spoken = extractText(hypothesis)
-        if (spoken.isNotEmpty()) {
-            handleCommand(spoken)
-        }
+        if (spoken.isNotEmpty()) handleCommand(spoken)
     }
 
     override fun onResult(hypothesis: String) {
         val spoken = extractText(hypothesis)
-        if (spoken.isNotEmpty()) {
-            handleCommand(spoken)
-        }
+        if (spoken.isNotEmpty()) handleCommand(spoken)
     }
 
     override fun onFinalResult(hypothesis: String) {
-        // अगर Vosk रुक जाए, तो दोबारा शुरू करें
         restartVosk()
     }
 
@@ -122,7 +114,6 @@ class VoiceControlService : Service(), RecognitionListener {
         }
     }
 
-    // Vosk JSON से "text" निकालो
     private fun extractText(json: String): String {
         return try {
             val start = json.indexOf("\"text\" : \"") + 10
@@ -136,7 +127,6 @@ class VoiceControlService : Service(), RecognitionListener {
     }
 
     private fun handleCommand(spoken: String) {
-        // डिबग के लिए Toast (बाद में हटा सकते हो)
         Toast.makeText(this, "Heard: $spoken", Toast.LENGTH_SHORT).show()
 
         for ((app, packageName) in appPackages) {
