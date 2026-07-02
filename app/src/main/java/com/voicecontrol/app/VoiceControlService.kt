@@ -22,7 +22,6 @@ class VoiceControlService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var isDestroyed = false
 
-    // ऐप का नाम -> पैकेज नेम
     private val appPackages = mapOf(
         "youtube" to "com.google.android.youtube",
         "chrome" to "com.android.chrome",
@@ -31,28 +30,24 @@ class VoiceControlService : Service() {
         "facebook" to "com.facebook.katana",
         "gmail" to "com.google.android.gm",
         "google" to "com.google.android.googlequicksearchbox",
-        "maps" to "com.google.android.apps.maps",
-        "calculator" to "com.android.calculator2",
-        "calendar" to "com.android.calendar"
+        "maps" to "com.google.android.apps.maps"
     )
 
-    // ऐप के हिंदी और आम नाम, जो लोग बोल सकते हैं
     private val appAliases = mapOf(
-        "youtube" to listOf("youtube", "yt", "youtub", "यूट्यूब", "ytube"),
-        "chrome" to listOf("chrome", "chrom", "क्रोम", "google chrome", "browser"),
-        "instagram" to listOf("instagram", "insta", "इंस्टाग्राम", "instagrm"),
-        "whatsapp" to listOf("whatsapp", "whatsap", "whats app", "व्हाट्सएप", "whatapp"),
-        "facebook" to listOf("facebook", "fb", "फेसबुक", "face book"),
-        "gmail" to listOf("gmail", "mail", "email", "जीमेल", "g mail"),
-        "google" to listOf("google", "गूगल", "googal", "assistant"),
-        "maps" to listOf("maps", "map", "मैप", "gps", "navigation"),
-        "calculator" to listOf("calculator", "calc", "कैलकुलेटर", "cal"),
-        "calendar" to listOf("calendar", "cal", "कैलेंडर", "calendar")
+        "youtube" to listOf("youtube", "yt", "youtub", "यूट्यूब"),
+        "chrome" to listOf("chrome", "chrom", "क्रोम", "browser"),
+        "instagram" to listOf("instagram", "insta", "इंस्टाग्राम"),
+        "whatsapp" to listOf("whatsapp", "whatsap", "whats app", "व्हाट्सएप"),
+        "facebook" to listOf("facebook", "fb", "फेसबुक"),
+        "gmail" to listOf("gmail", "mail", "email", "जीमेल"),
+        "google" to listOf("google", "गूगल", "assistant"),
+        "maps" to listOf("maps", "map", "मैप", "navigation")
     )
 
-    // एक्शन वर्ड्स
-    private val openWords = listOf("open", "kholo", "khol", "kholna", "खोलो", "खोल", "खोलना", "start", "launch", "play", "chalu", "चालू", "शुरू", "shuru", "chalana", "चलाना", "dikhao", "दिखाओ", "dekhna", "देखना", "jana", "जाना")
-    private val closeWords = listOf("close", "band", "bandh", "बंद", "बंद करो", "बंद करना", "ruk", "रुक", "stop", "hatana", "हटाना", "mitana", "मिटाना")
+    private val openWords = listOf(
+        "open", "kholo", "खोलो", "खोल", "start", "launch", "play",
+        "chalana", "चलाना", "dikhao", "दिखाओ", "jana", "जाना"
+    )
 
     override fun onCreate() {
         super.onCreate()
@@ -60,10 +55,7 @@ class VoiceControlService : Service() {
         setupRecognizer()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        return START_STICKY
-    }
-
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun buildNotification(): Notification {
@@ -73,8 +65,7 @@ class VoiceControlService : Service() {
                 getString(R.string.notif_channel_name),
                 NotificationManager.IMPORTANCE_LOW
             )
-            val nm = getSystemService(NotificationManager::class.java)
-            nm.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
@@ -85,24 +76,30 @@ class VoiceControlService : Service() {
     }
 
     private fun setupRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            Log.e(TAG, "Speech recognition not available on this device")
-            return
+        // ✅ अगर फ़ोन Android 12+ है और ऑन-डिवाइस इंजन उपलब्ध है, तो वही इस्तेमाल करें
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            SpeechRecognizer.isOnDeviceSpeechRecognizerAvailable(this)) {
+            recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+            Log.d(TAG, "Using on-device speech recognizer")
+        } else {
+            // नहीं तो सामान्य रेकग्नाइज़र
+            if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+                Log.e(TAG, "Speech recognition not available")
+                return
+            }
+            recognizer = SpeechRecognizer.createSpeechRecognizer(this)
         }
-        recognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
-            setRecognitionListener(listener)
-        }
+
+        recognizer?.setRecognitionListener(listener)
         startListening()
     }
 
     private fun startListening() {
-        if (isDestroyed) return
+        if (isDestroyed || recognizer == null) return
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN")
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
         }
         try {
             recognizer?.startListening(intent)
@@ -114,9 +111,7 @@ class VoiceControlService : Service() {
 
     private fun scheduleRestart(delayMs: Long = 2000) {
         if (isDestroyed) return
-        handler.postDelayed({
-            startListening()
-        }, delayMs)
+        handler.postDelayed({ startListening() }, delayMs)
     }
 
     private val listener = object : RecognitionListener {
@@ -127,48 +122,36 @@ class VoiceControlService : Service() {
         override fun onEndOfSpeech() {}
 
         override fun onError(error: Int) {
-            if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                scheduleRestart(1500)
-            } else {
-                scheduleRestart(2500)
-            }
+            // चुपचाप दोबारा सुनो, कोई बीप नहीं
+            scheduleRestart(1500)
         }
 
         override fun onResults(results: android.os.Bundle?) {
             val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-            val spoken = matches?.firstOrNull()?.lowercase()?.trim()
-            if (!spoken.isNullOrEmpty()) {
+            val spoken = matches?.firstOrNull()?.lowercase()?.trim() ?: ""
+            if (spoken.isNotEmpty()) {
                 Log.d(TAG, "Heard: $spoken")
                 handleCommand(spoken)
             }
-            scheduleRestart(600)
+            scheduleRestart(500)
         }
 
         override fun onPartialResults(partialResults: android.os.Bundle?) {}
         override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
     }
 
-    // ========== सुपर-स्मार्ट कमांड हैंडलिंग ==========
     private fun handleCommand(spoken: String) {
         val words = spoken.split(" ")
         var targetApp: String? = null
         var wantsOpen = false
-        var wantsClose = false
 
-        // 1. हर शब्द चेक करो
         for (word in words) {
-            // क्या यह कोई एक्शन वर्ड है?
-            if (openWords.any { it == word }) {
-                wantsOpen = true
-            }
-            if (closeWords.any { it == word }) {
-                wantsClose = true
-            }
-
-            // क्या यह कोई ऐप है?
+            if (openWords.any { it == word }) wantsOpen = true
             if (targetApp == null) {
                 for ((key, aliases) in appAliases) {
-                    if (aliases.any { alias -> levenshtein(word, alias) <= 2 || word.contains(alias) || alias.contains(word) }) {
+                    if (aliases.any { alias ->
+                            levenshtein(word, alias) <= 2 || word.contains(alias) || alias.contains(word)
+                        }) {
                         targetApp = key
                         break
                     }
@@ -176,40 +159,26 @@ class VoiceControlService : Service() {
             }
         }
 
-        // 2. अगर कोई एक्शन नहीं बोला, तो डिफ़ॉल्ट "open" मानो
-        if (!wantsOpen && !wantsClose) {
-            wantsOpen = true
-        }
+        if (!wantsOpen) wantsOpen = true   // अगर कोई एक्शन वर्ड नहीं बोला, तो डिफ़ॉल्ट "open"
 
-        // 3. अगर ऐप मिल गई और हमें खोलना है
         if (targetApp != null && wantsOpen) {
             val packageName = appPackages[targetApp]
             if (packageName != null) {
                 openApp(packageName)
             }
         }
-
-        // 4. बंद करने का प्रयास (हो सके तो)
-        if (targetApp != null && wantsClose) {
-            val packageName = appPackages[targetApp]
-            if (packageName != null) {
-                closeApp(packageName)
-            }
-        }
     }
 
-    // फ़ज़ी मैचिंग
     private fun levenshtein(a: String, b: String): Int {
         val dp = Array(a.length + 1) { IntArray(b.length + 1) }
         for (i in 0..a.length) dp[i][0] = i
         for (j in 0..b.length) dp[0][j] = j
         for (i in 1..a.length) {
             for (j in 1..b.length) {
-                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
                 dp[i][j] = minOf(
                     dp[i - 1][j] + 1,
                     dp[i][j - 1] + 1,
-                    dp[i - 1][j - 1] + cost
+                    dp[i - 1][j - 1] + if (a[i - 1] == b[j - 1]) 0 else 1
                 )
             }
         }
@@ -217,21 +186,12 @@ class VoiceControlService : Service() {
     }
 
     private fun openApp(packageName: String) {
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-        if (launchIntent != null) {
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(launchIntent)
+        val intent = packageManager.getLaunchIntentForPackage(packageName)
+        if (intent != null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
         } else {
             Log.e(TAG, "App not installed: $packageName")
-        }
-    }
-
-    private fun closeApp(packageName: String) {
-        try {
-            val am = getSystemService(ACTIVITY_SERVICE) as ActivityManager
-            am.killBackgroundProcesses(packageName)
-        } catch (e: Exception) {
-            Log.e(TAG, "closeApp failed: ${e.message}")
         }
     }
 
