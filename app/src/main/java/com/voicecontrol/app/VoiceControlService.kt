@@ -6,20 +6,26 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import org.vosk.LibVosk
+import org.vosk.LogLevel
+import org.vosk.Model
+import org.vosk.Recognizer
+import org.vosk.android.RecognitionListener
+import org.vosk.android.SpeechService
+import org.vosk.android.StorageService
+import java.io.IOException
 
-class VoiceControlService : Service() {
+class VoiceControlService : Service(), RecognitionListener {
 
-    private var recognizer: SpeechRecognizer? = null
-    private val handler = Handler(Looper.getMainLooper())
+    private var speechService: SpeechService? = null
+    private var model: Model? = null
     private var isDestroyed = false
+    private val handler = Handler(Looper.getMainLooper())
 
-    // तुम्हारी पसंद की ऐप्स – जरूरत पड़ने पर और जोड़ सकते हो
+    // कमांड मैपिंग – ज़रूरत पड़ने पर और शब्द जोड़ो
     private val appPackages = mapOf(
         "youtube" to "com.google.android.youtube",
         "chrome" to "com.android.chrome",
@@ -27,16 +33,10 @@ class VoiceControlService : Service() {
         "whatsapp" to "com.whatsapp"
     )
 
-    // हिंदी-अंग्रेजी के कमांड वर्ड्स
-    private val openWords = listOf(
-        "open", "kholo", "खोलो", "खोल", "start", "launch", "play",
-        "chalana", "चलाना", "dikhao", "दिखाओ", "jana", "जाना"
-    )
-
     override fun onCreate() {
         super.onCreate()
         startForeground(1, buildNotification())
-        setupRecognizer()
+        initModel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
@@ -45,98 +45,109 @@ class VoiceControlService : Service() {
     private fun buildNotification(): Notification {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                "voice_control",
-                getString(R.string.notif_channel_name),
+                "voice_control_vosk",
+                "Voice Control (Vosk)",
                 NotificationManager.IMPORTANCE_LOW
             )
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
-        return NotificationCompat.Builder(this, "voice_control")
-            .setContentTitle(getString(R.string.app_name))
-            .setContentText(getString(R.string.notif_text))
+        return NotificationCompat.Builder(this, "voice_control_vosk")
+            .setContentTitle("Voice Control")
+            .setContentText("Listening for commands…")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .build()
     }
 
-    private fun setupRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            Toast.makeText(this, "Speech recognition NOT available", Toast.LENGTH_LONG).show()
-            return
-        }
-        recognizer = SpeechRecognizer.createSpeechRecognizer(this)
-        recognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: android.os.Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-
-            override fun onError(error: Int) {
-                // एरर पर चुपचाप दोबारा सुनना शुरू करो, कोई बीप नहीं
-                scheduleRestart(2000)
+    private fun initModel() {
+        LibVosk.setLogLevel(LogLevel.WARNINGS)
+        StorageService.unpack(this, "model-en-us", "model",
+            { mdl ->
+                model = mdl
+                startVoskListening()
+                Toast.makeText(this, "Vosk model ready", Toast.LENGTH_SHORT).show()
+            },
+            { err ->
+                Log.e("Vosk", "Failed to unpack model", err)
+                stopSelf()
             }
-
-            override fun onResults(results: android.os.Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                val spoken = matches?.firstOrNull()?.lowercase()?.trim() ?: ""
-                if (spoken.isNotEmpty()) {
-                    // डिबग: स्क्रीन पर दिखाओ कि ऐप ने क्या सुना
-                    Toast.makeText(this@VoiceControlService, "Heard: $spoken", Toast.LENGTH_SHORT).show()
-                    handleCommand(spoken)
-                }
-                scheduleRestart(500)
-            }
-
-            override fun onPartialResults(partialResults: android.os.Bundle?) {}
-            override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
-        })
-        startListening()
+        )
     }
 
-    private fun startListening() {
-        if (isDestroyed || recognizer == null) return
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN")
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-        }
+    private fun startVoskListening() {
         try {
-            recognizer?.startListening(intent)
-        } catch (e: Exception) {
-            scheduleRestart(2000)
+            val rec = Recognizer(model, 16000.0f)
+            speechService = SpeechService(rec, 16000.0f)
+            speechService?.startListening(this)
+        } catch (e: IOException) {
+            Log.e("Vosk", "Failed to start Vosk recognizer", e)
         }
     }
 
-    private fun scheduleRestart(delayMs: Long = 2000) {
-        if (isDestroyed) return
-        handler.postDelayed({ startListening() }, delayMs)
+    // RecognitionListener callbacks
+    override fun onPartialResult(hypothesis: String) {
+        // Vosk देता है JSON, हम सिर्फ "text" फील्ड निकालेंगे
+        val spoken = extractText(hypothesis)
+        if (spoken.isNotEmpty()) {
+            handleCommand(spoken)
+        }
+    }
+
+    override fun onResult(hypothesis: String) {
+        val spoken = extractText(hypothesis)
+        if (spoken.isNotEmpty()) {
+            handleCommand(spoken)
+        }
+    }
+
+    override fun onFinalResult(hypothesis: String) {
+        // अगर Vosk रुक जाए, तो दोबारा शुरू करें
+        restartVosk()
+    }
+
+    override fun onError(exception: Exception) {
+        Log.e("Vosk", "Recognition error", exception)
+        restartVosk()
+    }
+
+    override fun onTimeout() {
+        restartVosk()
+    }
+
+    private fun restartVosk() {
+        speechService?.stop()
+        speechService = null
+        if (!isDestroyed) {
+            handler.postDelayed({ startVoskListening() }, 1000)
+        }
+    }
+
+    // Vosk JSON से "text" निकालो
+    private fun extractText(json: String): String {
+        return try {
+            val start = json.indexOf("\"text\" : \"") + 10
+            val end = json.indexOf("\"", start)
+            if (start >= 10 && end > start) {
+                json.substring(start, end).lowercase().trim()
+            } else ""
+        } catch (e: Exception) {
+            ""
+        }
     }
 
     private fun handleCommand(spoken: String) {
-        // क्या बोले गए वाक्य में कोई ऐप का नाम है?
+        // डिबग के लिए Toast (बाद में हटा सकते हो)
+        Toast.makeText(this, "Heard: $spoken", Toast.LENGTH_SHORT).show()
+
         for ((app, packageName) in appPackages) {
-            // अगर सीधे नाम मिल गया
-            if (spoken.contains(app)) {
+            if (spoken.contains(app) ||
+                (app == "youtube" && (spoken.contains("youtub") || spoken.contains("yt") || spoken.contains("यूट्यूब"))) ||
+                (app == "chrome" && (spoken.contains("chrom") || spoken.contains("क्रोम"))) ||
+                (app == "instagram" && (spoken.contains("insta") || spoken.contains("इंस्टाग्राम"))) ||
+                (app == "whatsapp" && (spoken.contains("whatsap") || spoken.contains("whats app") || spoken.contains("व्हाट्सएप")))
+            ) {
                 openApp(packageName, app)
                 return
-            }
-        }
-
-        // हिंदी/आम नाम के लिए अलग-अलग शब्द
-        val aliases = mapOf(
-            "youtube" to listOf("youtub", "yt", "यूट्यूब"),
-            "chrome" to listOf("chrom", "क्रोम", "browser"),
-            "instagram" to listOf("insta", "इंस्टाग्राम"),
-            "whatsapp" to listOf("whatsap", "whats app", "व्हाट्सएप")
-        )
-        for ((app, words) in aliases) {
-            for (word in words) {
-                if (spoken.contains(word)) {
-                    openApp(appPackages[app]!!, app)
-                    return
-                }
             }
         }
     }
@@ -154,9 +165,10 @@ class VoiceControlService : Service() {
 
     override fun onDestroy() {
         isDestroyed = true
-        handler.removeCallbacksAndMessages(null)
-        recognizer?.destroy()
-        recognizer = null
+        speechService?.stop()
+        speechService?.shutdown()
+        speechService = null
+        model = null
         super.onDestroy()
     }
 }
