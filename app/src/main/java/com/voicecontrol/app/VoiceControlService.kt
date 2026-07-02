@@ -19,7 +19,7 @@ class VoiceControlService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var isDestroyed = false
 
-    // तुम्हारी पसंद की ऐप्स
+    // तुम्हारी पसंद की ऐप्स – जरूरत पड़ने पर और जोड़ सकते हो
     private val appPackages = mapOf(
         "youtube" to "com.google.android.youtube",
         "chrome" to "com.android.chrome",
@@ -27,8 +27,11 @@ class VoiceControlService : Service() {
         "whatsapp" to "com.whatsapp"
     )
 
-    // कौन से शब्द सुनने पर ऐप खोलनी है
-    private val keywords = listOf("open", "kholo", "खोलो", "start", "launch", "play", "dikhao", "दिखाओ")
+    // हिंदी-अंग्रेजी के कमांड वर्ड्स
+    private val openWords = listOf(
+        "open", "kholo", "खोलो", "खोल", "start", "launch", "play",
+        "chalana", "चलाना", "dikhao", "दिखाओ", "jana", "जाना"
+    )
 
     override fun onCreate() {
         super.onCreate()
@@ -68,18 +71,23 @@ class VoiceControlService : Service() {
             override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
+
             override fun onError(error: Int) {
-                scheduleRestart(1500)
+                // एरर पर चुपचाप दोबारा सुनना शुरू करो, कोई बीप नहीं
+                scheduleRestart(2000)
             }
+
             override fun onResults(results: android.os.Bundle?) {
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val spoken = matches?.firstOrNull()?.lowercase()?.trim() ?: ""
                 if (spoken.isNotEmpty()) {
+                    // डिबग: स्क्रीन पर दिखाओ कि ऐप ने क्या सुना
                     Toast.makeText(this@VoiceControlService, "Heard: $spoken", Toast.LENGTH_SHORT).show()
                     handleCommand(spoken)
                 }
                 scheduleRestart(500)
             }
+
             override fun onPartialResults(partialResults: android.os.Bundle?) {}
             override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
         })
@@ -107,24 +115,25 @@ class VoiceControlService : Service() {
     }
 
     private fun handleCommand(spoken: String) {
-        // पहले चेक करो कि कोई ऐप का नाम तो नहीं बोला गया
+        // क्या बोले गए वाक्य में कोई ऐप का नाम है?
         for ((app, packageName) in appPackages) {
+            // अगर सीधे नाम मिल गया
             if (spoken.contains(app)) {
-                // अगर सिर्फ नाम बोला, या साथ में कोई कीवर्ड भी है
                 openApp(packageName, app)
                 return
             }
         }
-        // अगर कोई हिंदी या मिलता-जुलता नाम है, तो उसे भी पकड़ो
+
+        // हिंदी/आम नाम के लिए अलग-अलग शब्द
         val aliases = mapOf(
             "youtube" to listOf("youtub", "yt", "यूट्यूब"),
             "chrome" to listOf("chrom", "क्रोम", "browser"),
             "instagram" to listOf("insta", "इंस्टाग्राम"),
             "whatsapp" to listOf("whatsap", "whats app", "व्हाट्सएप")
         )
-        for ((app, list) in aliases) {
-            for (alias in list) {
-                if (spoken.contains(alias)) {
+        for ((app, words) in aliases) {
+            for (word in words) {
+                if (spoken.contains(word)) {
                     openApp(appPackages[app]!!, app)
                     return
                 }
